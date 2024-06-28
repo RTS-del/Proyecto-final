@@ -1,0 +1,292 @@
+Este código crea una aplicación de múltiples ventanas utilizando la biblioteca Tkinter. Aquí hay un desglose detallado de cada parte del código y su funcionamiento:
+import tkinter as tk
+from tkinter import messagebox, simpledialog, ttk, filedialog, font
+import requests
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import ipaddress
+import psutil
+import platform
+from scapy.all import *
+from scapy.layers.inet import IP, ICMP
+from scapy.layers.l2 import ARP, Ether
+from netaddr import IPNetwork
+  
+Estas son las importaciones necesarias para la funcionalidad de la aplicación:
+
+tkinter: Para la interfaz gráfica.
+requests: Para hacer solicitudes HTTP.
+sqlite3: Para interactuar con la base de datos SQLite.
+pandas y matplotlib.pyplot: Para análisis y visualización de datos.
+ipaddress: Para manejar direcciones IP.
+psutil y platform: Para obtener información del sistema.
+scapy: Para funciones de red como ping y escaneo de red.
+netaddr: Para manejar rangos de IP.
+
+Creación de la Base de Datos
+def create_database():
+    conn = sqlite3.connect('app_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS windows (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        window_name TEXT NOT NULL,
+                        content TEXT NOT NULL)''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS api_data (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        value TEXT NOT NULL)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS subnets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ip TEXT NOT NULL,
+                        subnet_mask TEXT NOT NULL,
+                        network_address TEXT NOT NULL,
+                        number_of_hosts INTEGER NOT NULL,
+                        number_of_subnets INTEGER NOT NULL)''')
+    conn.commit()
+    conn.close()
+Esta función crea la base de datos SQLite y define tres tablas: windows, api_data y subnets.
+
+Funciones de Interacción con API
+def fetch_api_data():
+    response = requests.get("https://pokeapi.co/api/v2/pokemon/pikachu")
+    return response.json()
+Obtiene datos de la API de Pokémon.
+def insert_api_data(name, value):
+    conn = sqlite3.connect('app_database.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO api_data (name, value) VALUES (?, ?)", (name, value))
+    conn.commit()
+    conn.close()
+
+def update_api_data(id, name, value):
+    conn = sqlite3.connect('app_database.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE api_data SET name = ?, value = ? WHERE id = ?", (name, value, id))
+    conn.commit()
+    conn.close()
+
+def delete_api_data(id):
+    conn = sqlite3.connect('app_database.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM api_data WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+
+def get_all_api_data():
+    conn = sqlite3.connect('app_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM api_data")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+Estas funciones permiten insertar, actualizar, eliminar y obtener datos de la tabla api_data en la base de datos.
+
+Funciones de Subneteo
+def save_subnet_data(ip, subnet_mask, network_address, number_of_hosts, number_of_subnets):
+    conn = sqlite3.connect('app_database.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO subnets (ip, subnet_mask, network_address, number_of_hosts, number_of_subnets) VALUES (?, ?, ?, ?, ?)",
+                   (ip, subnet_mask, network_address, number_of_hosts, number_of_subnets))
+    conn.commit()
+    conn.close()
+
+def calculate_subnet(ip, subnet_mask):
+    try:
+        network = ipaddress.IPv4Network(f"{ip}/{subnet_mask}", strict=False)
+        network_address = str(network.network_address)
+        number_of_hosts = network.num_addresses - 2  
+        number_of_subnets = 2**(32 - network.prefixlen)
+        return network_address, number_of_hosts, number_of_subnets
+    except ValueError as e:
+        messagebox.showerror("Error", f"Invalid IP address or subnet mask: {e}")
+        return None, None, None
+
+save_subnet_data guarda la información del subneteado en la base de datos. calculate_subnet calcula la dirección de red, el número de hosts y el número de subredes a partir de una dirección IP y una máscara de subred.
+
+Funciones para Leer y Filtrar Logs
+def leer_log(nombre_archivo):
+    try:
+        with open(nombre_archivo, 'r') as archivo:
+            logs = archivo.readlines()
+        return logs
+    except FileNotFoundError:
+        messagebox.showerror("Error", "El archivo no existe. Asegúrate de que el nombre del archivo sea correcto.")
+        return []
+
+def filtrar_logs(logs, criterio):
+    logs_filtrados = [log for log in logs if criterio in log]
+    return logs_filtrados
+
+def mostrar_logs(logs):
+    text_area.delete('1.0', tk.END)
+    for log in logs:
+        text_area.insert(tk.END, log)
+Estas funciones leen un archivo de log, filtran los logs por un criterio y muestran los logs en una Text area de Tkinter.
+Funciones de Control de Logs
+def leer_archivo():
+    global logs
+    nombre_archivo = filedialog.askopenfilename(title="Seleccionar archivo de log", filetypes=[("Archivos de texto", "*.txt")])
+    if nombre_archivo:
+        logs = leer_log(nombre_archivo)
+        if logs:
+            messagebox.showinfo("Información", f"Se leyeron {len(logs)} entradas del log.")
+        mostrar_logs(logs)
+
+def filtrar_archivo():
+    if not logs:
+        messagebox.showwarning("Advertencia", "Primero debes leer el archivo de log.")
+        return
+    criterio = criterio_entry.get()
+    if criterio:
+        logs_filtrados = filtrar_logs(logs, criterio)
+        mostrar_logs(logs_filtrados)
+    else:
+        messagebox.showwarning("Advertencia", "Debes ingresar un criterio para filtrar.")
+
+def mostrar_estadisticas():
+    if not logs:
+        messagebox.showwarning("Advertencia", "Primero debes leer el archivo de log.")
+        return
+    severidad_count = {
+        'INFO': 0,
+        'WARNING': 0,
+        'ERROR': 0,
+        'CRITICAL': 0
+    }
+    origen_count = {}
+
+    for log in logs:
+        if "INFO" in log:
+            severidad_count['INFO'] += 1
+        elif "WARNING" in log:
+            severidad_count['WARNING'] += 1
+        elif "ERROR" in log:
+            severidad_count['ERROR'] += 1
+        elif "CRITICAL" in log:
+            severidad_count['CRITICAL'] += 1
+        if '(' in log and ')' in log:
+            inicio_origen = log.index('(') + 1
+            fin_origen = log.index(')')
+            origen = log[inicio_origen:fin_origen]
+            if origen in origen_count:
+                origen_count[origen] += 1
+            else:
+                origen_count[origen] = 1
+    stats_message = "Estadísticas del archivo:\n\n"
+    stats_message += "Cantidad de logs por nivel de severidad:\n"
+    for severidad, count in severidad_count.items():
+        stats_message += f"{severidad}: {count}\n"
+
+    stats_message += "\nCantidad de logs por origen:\n"
+    for origen, count in origen_count.items():
+        stats_message += f"{origen}: {count}\n"
+
+    messagebox.showinfo("Estadísticas", stats_message)
+    Estas funciones manejan la lectura de archivos de logs, el filtrado de logs y la visualización de estadísticas de los logs.
+
+    Clase Principal de la Aplicación
+    class Application(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Aplicación Multiventana")
+        self.geometry("800x600")
+        
+        fuente_titulo = font.Font(family='Times New Roman', size=14, weight='bold')
+        fuente_texto = font.Font(family='Times New Roman', size=12)
+        
+        main_frame = tk.Frame(self)
+        main_frame.pack(pady=20)
+
+        self.create_menu(main_frame, fuente_texto)
+        self.create_subnet_calc_button(main_frame, fuente_texto)
+        self.create_log_reader_button(main_frame, fuente_texto)
+        self.create_api_button(main_frame, fuente_texto)
+        self.create_system_analysis_buttons(main_frame, fuente_texto)
+        self.create_scapy_button(main_frame, fuente_texto)
+  La clase Application define la ventana principal de la aplicación y agrega botones para las diferentes funcionalidades.
+  Creación del Menú
+      def create_menu(self, frame, font):
+        menu_bar = tk.Menu(self)
+        self.config(menu=menu_bar)
+
+        file_menu = tk.Menu(menu_bar, tearoff=0)
+        file_menu.add_command(label="Abrir", command=self.open_file)
+        file_menu.add_command(label="Guardar", command=self.save_file)
+        file_menu.add_separator()
+        file_menu.add_command(label="Salir", command=self.quit)
+        menu_bar.add_cascade(label="Archivo", menu=file_menu)
+
+        help_menu = tk.Menu(menu_bar, tearoff=0)
+        help_menu.add_command(label="Acerca de", command=self.show_about)
+        menu_bar.add_cascade(label="Ayuda", menu=help_menu)
+Esta parte del código crea un menú con opciones para abrir, guardar y salir de la aplicación, así como una opción de ayuda.
+Funciones del Menú
+    def open_file(self):
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            with open(file_path, 'r') as file:
+                data = file.read()
+                self.display_text(data)
+
+    def save_file(self):
+        file_path = filedialog.asksaveasfilename(defaultextension=".txt")
+        if file_path:
+            with open(file_path, 'w') as file:
+                data = self.text_area.get("1.0", tk.END)
+                file.write(data)
+
+    def show_about(self):
+        messagebox.showinfo("Acerca de", "Aplicación Multiventana - Versión 1.0")
+Estas funciones manejan la apertura y guardado de archivos, y muestran información sobre la aplicación.
+Botones de Funcionalidades
+    def create_subnet_calc_button(self, frame, font):
+        button = tk.Button(frame, text="Calculadora de Subnet", font=font, command=self.open_subnet_calculator)
+        button.pack(pady=5)
+
+    def open_subnet_calculator(self):
+        SubnetCalculatorWindow(self)
+
+    def create_log_reader_button(self, frame, font):
+        button = tk.Button(frame, text="Visor de Logs", font=font, command=self.open_log_viewer)
+        button.pack(pady=5)
+
+    def open_log_viewer(self):
+        LogViewerWindow(self)
+
+    def create_api_button(self, frame, font):
+        button = tk.Button(frame, text="Trabajo con API", font=font, command=self.open_api_window)
+        button.pack(pady=5)
+
+    def open_api_window(self):
+        ApiWindow(self)
+
+    def create_system_analysis_buttons(self, frame, font):
+        real_time_button = tk.Button(frame, text="Análisis de PC en Tiempo Real", font=font, command=self.open_real_time_system_analysis)
+        real_time_button.pack(pady=5)
+
+        on_demand_button = tk.Button(frame, text="Análisis de PC Bajo Demanda", font=font, command=self.open_on_demand_system_analysis)
+        on_demand_button.pack(pady=5)
+
+    def open_real_time_system_analysis(self):
+        RealTimeSystemAnalysisWindow(self)
+
+    def open_on_demand_system_analysis(self):
+        OnDemandSystemAnalysisWindow(self)
+
+    def create_scapy_button(self, frame, font):
+        button = tk.Button(frame, text="Funcionalidades de Red con Scapy", font=font, command=self.open_scapy_functions)
+        button.pack(pady=5)
+
+    def open_scapy_functions(self):
+        ScapyFunctionsWindow(self)
+
+    def display_text(self, text):
+        self.text_area.delete("1.0", tk.END)
+        self.text_area.insert(tk.END, text)
+Estos métodos crean botones en la ventana principal para cada una de las funcionalidades y abren las ventanas correspondientes.
+
+Y haci con todo la explicacion mas detallada es la del video
